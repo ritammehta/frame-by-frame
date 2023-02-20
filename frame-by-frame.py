@@ -36,10 +36,12 @@ class FrameVis:
 	Reads a video file and outputs an image comprised of n resized frames, spread evenly throughout the file.
 	"""
 
-	default_frame_height = None  # auto, or in pixels
-	default_frame_width = None  # auto, or in pixels
+	default_frame_height = 3  # auto, or in pixels
+	default_frame_width = 2160  # auto, or in pixels
 	default_concat_size = 1  # size of concatenated frame if automatically calculated, in pixels
 	default_direction = "horizontal"  # left to right
+	output_width = 2160
+	output_height = 3840
 
 	def visualize(self, source, nframes, height=default_frame_height, width=default_frame_width, \
 		direction=default_direction, trim=False, quiet=True):
@@ -138,8 +140,8 @@ class FrameVis:
 			output_height = height
 		elif direction == "vertical":
 			concatenate = cv2.vconcat
-			output_width = width
-			output_height = height * nframes
+			output_width = self.output_width
+			output_height = self.output_height
 		else:
 			raise ValueError("Invalid direction specified")
 

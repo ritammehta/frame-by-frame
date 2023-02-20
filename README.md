@@ -7,7 +7,7 @@ For more information, see [the blog post on PartsNotIncluded.com](http://www.par
 ## Basic Usage
 
 ```bash
-python framevis.py source_video.mkv result.png -n 1600
+python frame-by-frame.py source_video.mkv result.png -n 1600
 ```
 
 To use the script, invoke it from the command line and pass positional arguments for the source and destination file paths (respectively). You will also need to provide either the number of frames to use (`-n`), or a capture interval in seconds (`-i`). The script will then process the video and save the result to the file specified.
