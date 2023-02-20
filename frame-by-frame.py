@@ -29,6 +29,8 @@ import numpy as np
 import argparse
 from enum import Enum, auto
 import time
+import pendulum
+from PIL import Image, ImageFont, ImageDraw
 
 
 class FrameVis:
@@ -36,15 +38,16 @@ class FrameVis:
 	Reads a video file and outputs an image comprised of n resized frames, spread evenly throughout the file.
 	"""
 
-	default_frame_height = 3  # auto, or in pixels
 	default_frame_width = 2160  # auto, or in pixels
 	default_concat_size = 1  # size of concatenated frame if automatically calculated, in pixels
-	default_direction = "horizontal"  # left to right
+	default_direction = "vertical"  # up to down
 	output_width = 2160
 	output_height = 3840
+	default_nframes = 25
+	default_frame_height = int(output_height / default_nframes)  # auto, or in pixels
 
-	def visualize(self, source, nframes, height=default_frame_height, width=default_frame_width, \
-		direction=default_direction, trim=False, quiet=True):
+	def visualize(self, source, nframes=default_nframes, height=default_frame_height, width=default_frame_width,
+				  direction=default_direction, trim=False, quiet=False):
 		"""
 		Reads a video file and outputs an image comprised of n resized frames, spread evenly throughout the file.
 
@@ -66,9 +69,11 @@ class FrameVis:
 
 		if not quiet:
 			print("")  # create space from script call line
-		
+
 		# calculate keyframe interval
 		video_total_frames = video.get(cv2.CAP_PROP_FRAME_COUNT)  # retrieve total frame count from metadata
+		video_fps = video.get(cv2.CAP_PROP_FPS)
+		video_duration = video_total_frames / video_fps
 		if not isinstance(nframes, int) or nframes < 1:
 			raise ValueError("Number of frames must be a positive integer")
 		elif nframes > video_total_frames:
@@ -76,7 +81,7 @@ class FrameVis:
 		keyframe_interval = video_total_frames / nframes  # calculate number of frames between captures
 
 		# grab frame for dimension calculations
-		success,image = video.read()  # get first frame
+		success, image = video.read()  # get first frame
 		if not success:
 			raise IOError("Cannot read from video file")
 
@@ -97,17 +102,21 @@ class FrameVis:
 				if crop_height != image.shape[0]:  # letterboxing
 					matte_type += 1
 				if crop_width != image.shape[1]:  # pillarboxing
-					matte_type +=2
-			
+					matte_type += 2
+
 			if not quiet:
 				if matte_type == 0:
 					print("no matting detected")
 				elif matte_type == 1:
-					print("letterboxing detected, cropping {} px from the top and bottom".format(int((image.shape[0] - crop_height) / 2)))
+					print("letterboxing detected, cropping {} px from the top and bottom".format(
+						int((image.shape[0] - crop_height) / 2)))
 				elif matte_type == 2:
-					print("pillarboxing detected, trimming {} px from the sides".format(int((image.shape[1] - crop_width) / 2)))
+					print("pillarboxing detected, trimming {} px from the sides".format(
+						int((image.shape[1] - crop_width) / 2)))
 				elif matte_type == 3:
-					print("multiple matting detected - cropping ({}, {}) to ({}, {})".format(image.shape[1], image.shape[0], crop_width, crop_height))
+					print("multiple matting detected - cropping ({}, {}) to ({}, {})".format(image.shape[1],
+																							 image.shape[0], crop_width,
+																							 crop_height))
 
 		# calculate height
 		if height is None:  # auto-calculate
@@ -120,7 +129,7 @@ class FrameVis:
 				height = FrameVis.default_concat_size
 		elif not isinstance(height, int) or height < 1:
 			raise ValueError("Frame height must be a positive integer")
-		
+
 		# calculate width
 		if width is None:  # auto-calculate
 			if direction == "vertical":  # non-concat, use video size
@@ -147,8 +156,9 @@ class FrameVis:
 
 		if not quiet:
 			aspect_ratio = output_width / output_height
-			print("Visualizing \"{}\" - {} by {} ({:.2f}), from {} frames (every {:.2f} seconds)"\
-				.format(source, output_width, output_height, aspect_ratio, nframes, FrameVis.interval_from_nframes(source, nframes)))
+			print("Visualizing \"{}\" - {} by {} ({:.2f}), from {} frames (every {:.2f} seconds)" \
+				  .format(source, output_width, output_height, aspect_ratio, nframes,
+						  FrameVis.interval_from_nframes(source, nframes)))
 
 		# set up for the frame processing loop
 		next_keyframe = keyframe_interval / 2  # frame number for the next frame grab, starting evenly offset from start/end
@@ -161,10 +171,11 @@ class FrameVis:
 				break  # done!
 
 			video.set(cv2.CAP_PROP_POS_FRAMES, int(next_keyframe))  # move cursor to next sampled frame
-			success,image = video.read()  # read the next frame
+			success, image = video.read()  # read the next frame
 
 			if not success:
-				raise IOError("Cannot read from video file (frame {} out of {})".format(int(next_keyframe), video_total_frames))
+				raise IOError(
+					"Cannot read from video file (frame {} out of {})".format(int(next_keyframe), video_total_frames))
 
 			if matte_type != 0:  # crop out matting, if specified and matting is present
 				image = MatteTrimmer.crop_image(image, cropping_bounds)
@@ -185,7 +196,7 @@ class FrameVis:
 
 		video.release()  # close video capture
 
-		return output_image
+		return output_image, video_duration
 
 	@staticmethod
 	def average_image(image, direction):
@@ -217,7 +228,7 @@ class FrameVis:
 		return image
 
 	@staticmethod
-	def motion_blur(image, direction, blur_amount):
+	def motion_blur(image, direction='vertical', blur_amount=100):
 		"""
 		Blurs the pixels in a given axis across an entire image.
 
@@ -229,14 +240,16 @@ class FrameVis:
 		Returns:
 			image, with pixel data blurred along provided axis
 		"""
-		
+
 		kernel = np.zeros((blur_amount, blur_amount))  # create convolution kernel
 
 		# fill group with '1's
 		if direction == "horizontal":
-			kernel[:, int((blur_amount - 1)/2)] = np.ones(blur_amount)  # fill center column (blurring vertically for horizontal concat)
+			kernel[:, int((blur_amount - 1) / 2)] = np.ones(
+				blur_amount)  # fill center column (blurring vertically for horizontal concat)
 		elif direction == "vertical":
-			kernel[int((blur_amount - 1)/2), :] = np.ones(blur_amount)  # fill center row (blurring horizontally for vertical concat)
+			kernel[int((blur_amount - 1) / 2), :] = np.ones(
+				blur_amount)  # fill center row (blurring horizontally for vertical concat)
 		else:
 			raise ValueError("Invalid direction specified")
 
@@ -293,6 +306,109 @@ class FrameVis:
 
 		return keyframe_interval / fps  # seconds between captures
 
+	def caption_text(
+			self,
+			img,
+			date: str,
+			start_time: str,
+			city: str,
+			country: str,
+			venue: str,
+			attendance: int,
+			duration: int,
+			ntimestamps: int = 8,
+	):
+		color_converted = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
+		pil_img = Image.fromarray(color_converted)
+
+		# all measurements based off a height of 3240
+
+		font = ImageFont.FreeTypeFont('roboto_mono.ttf', 75)
+		text_image = Image.new('RGBA', pil_img.size, (255, 255, 255, 0))
+		drawing = ImageDraw.Draw(text_image)
+
+		# print timestamps
+		top_edge = 50
+		top = 50
+		left_edge = 50
+		bottom_edge = 0
+		current_timestamp = pendulum.from_format(date + ' ' + start_time, fmt='YYYY-MM-DD h:mm A')
+		timestamp_split_duration = int(duration / ntimestamps)
+		for timestamp in range(0, ntimestamps):
+			self.text_with_rectangle(
+				img=drawing,
+				x=left_edge,
+				y=top,
+				text=current_timestamp.format(fmt='h:mm A'),
+				font=font
+			)
+			current_timestamp = current_timestamp.add(seconds=timestamp_split_duration)
+			top += (self.output_height - bottom_edge - top_edge) / ntimestamps
+
+		top_of_right_side_text = int(self.output_height / 2)
+		right_edge = self.output_width - 50
+		right_side_text_spacing = int(self.output_height / 2 / 4)
+		# print date
+		self.text_with_rectangle(
+			img=drawing,
+			x=right_edge,
+			y=top_of_right_side_text,
+			text=current_timestamp.format(fmt='MM.DD.YYYY'),
+			font=font,
+			alignment='right'
+		)
+		top_of_right_side_text += right_side_text_spacing
+
+		# print city, country
+		self.text_with_rectangle(
+			img=drawing,
+			x=right_edge,
+			y=top_of_right_side_text,
+			text=city + ', ' + country,
+			font=font,
+			alignment='right'
+		)
+		top_of_right_side_text += right_side_text_spacing
+
+		# print venue
+		self.text_with_rectangle(
+			img=drawing,
+			x=right_edge,
+			y=top_of_right_side_text,
+			text=venue,
+			font=font,
+			alignment='right'
+		)
+		top_of_right_side_text += right_side_text_spacing
+
+		# attendance
+		self.text_with_rectangle(
+			img=drawing,
+			x=right_edge,
+			y=top_of_right_side_text,
+			text=f'{attendance} people',
+			font=font,
+			alignment='right'
+		)
+
+		output_image = Image.alpha_composite(pil_img, text_image)
+
+		return output_image
+
+	@staticmethod
+	def text_with_rectangle(img: ImageDraw.ImageDraw, x: int, y: int, text: str, font: ImageFont.ImageFont,
+							text_size: int = 75,
+							padding: int = 75, alignment=None) -> object:
+		text_length = img.textlength(text, font=font)
+		if alignment == 'right':
+			x = x - text_length - 2 * padding
+		img.rounded_rectangle(
+			((x, y), (x + 2 * padding + text_length, y + text_size + padding)),
+			radius=50,
+			fill=(255, 255, 255, 128)
+		)
+		img.text(xy=(x + padding, y + padding), text=text, font=font, anchor='lm', fill=(0, 0, 0))
+
 
 class MatteTrimmer:
 	"""
@@ -336,13 +452,13 @@ class MatteTrimmer:
 			first  (arr, 1.2.2): pair of rectangular coordinates, in the form [(X,Y), (X,Y)]
 			second (arr, 1.2.2): pair of rectangular coordinates, in the form [(X,Y), (X,Y)]
 
-			Where for both arrays the first coordinate is in the top left-hand corner, 
+			Where for both arrays the first coordinate is in the top left-hand corner,
 			and the second coordinate is in the bottom right-hand corner.
 
 		Returns:
 			numpy coordinate matrix containing both of the provided boundaries
 		"""
-		left_edge  = first[0][0] if first[0][0] <= second[0][0] else second[0][0]
+		left_edge = first[0][0] if first[0][0] <= second[0][0] else second[0][0]
 		right_edge = first[1][0] if first[1][0] >= second[1][0] else second[1][0]
 
 		top_edge = first[0][1] if first[0][1] <= second[0][1] else second[0][1]
@@ -367,8 +483,8 @@ class MatteTrimmer:
 				if bounds[x][y] is None:
 					return False  # not a number
 
-		if bounds[0][0] > bounds[1][0]  or \
-			bounds[0][1] > bounds[1][1]:
+		if bounds[0][0] > bounds[1][0] or \
+				bounds[0][1] > bounds[1][1]:
 			return False  # left > right or top > bottom
 
 		return True
@@ -385,20 +501,22 @@ class MatteTrimmer:
 
 		Returns:
 			success (bool): True or False if the bounds are valid
-			image_bounds: numpy coordinate matrix with the two opposite corners of the 
+			image_bounds: numpy coordinate matrix with the two opposite corners of the
 				image bounds, in the form [(X,Y), (X,Y)]
 		"""
 
 		height, width, depth = image.shape
 
 		# check for letterboxing
-		horizontal_sums = np.sum(image, axis=(1,2))  # sum all color channels across all rows
-		hthreshold = (threshold * width * depth)  # must be below every pixel having a value of "threshold" in every channel
+		horizontal_sums = np.sum(image, axis=(1, 2))  # sum all color channels across all rows
+		hthreshold = (
+				threshold * width * depth)  # must be below every pixel having a value of "threshold" in every channel
 		vertical_edges = MatteTrimmer.find_matrix_edges(horizontal_sums, hthreshold)
 
 		# check for pillarboxing
-		vertical_sums = np.sum(image, axis=(0,2))  # sum all color channels across all columns
-		vthreshold = (threshold * height * depth)  # must be below every pixel having a value of "threshold" in every channel
+		vertical_sums = np.sum(image, axis=(0, 2))  # sum all color channels across all columns
+		vthreshold = (
+				threshold * height * depth)  # must be below every pixel having a value of "threshold" in every channel
 		horizontal_edges = MatteTrimmer.find_matrix_edges(vertical_sums, vthreshold)
 
 		image_bounds = np.array([[horizontal_edges[0], vertical_edges[0]], [horizontal_edges[1], vertical_edges[1]]])
@@ -418,7 +536,7 @@ class MatteTrimmer:
 
 		Returns:
 			success (bool): True or False if the bounds are valid
-			video_bounds: numpy coordinate matrix with the two opposite corners of the 
+			video_bounds: numpy coordinate matrix with the two opposite corners of the
 				video bounds, in the form [(X,Y), (X,Y)]
 		"""
 		video = cv2.VideoCapture(source)  # open video file
@@ -432,7 +550,7 @@ class MatteTrimmer:
 
 		# open video to make results consistent with visualizer
 		# (this also GREATLY increases the read speed? no idea why)
-		success,image = video.read()  # get first frame
+		success, image = video.read()  # get first frame
 		if not success:
 			raise IOError("Cannot read from video file")
 
@@ -441,17 +559,18 @@ class MatteTrimmer:
 
 		for frame_number in range(nsamples):
 			video.set(cv2.CAP_PROP_POS_FRAMES, int(next_keyframe))  # move cursor to next sampled frame
-			success,image = video.read()  # read the next frame
+			success, image = video.read()  # read the next frame
 
 			if not success:
 				raise IOError("Cannot read from video file")
-			
+
 			success, frame_bounds = MatteTrimmer.determine_image_bounds(image, threshold)
 
 			if not success:
 				continue  # don't compare bounds, frame bounds are invalid
 
-			video_bounds = frame_bounds if video_bounds is None else MatteTrimmer.find_larger_bound(video_bounds, frame_bounds)
+			video_bounds = frame_bounds if video_bounds is None else MatteTrimmer.find_larger_bound(video_bounds,
+																									frame_bounds)
 			next_keyframe += keyframe_interval  # set next frame capture time, maintaining floats
 
 		video.release()  # close video capture
@@ -471,6 +590,7 @@ class MatteTrimmer:
 			image as 3-dimensional numpy array, cropped to the coordinate bounds
 		"""
 		return image[bounds[0][1]:bounds[1][1], bounds[0][0]:bounds[1][0]]
+
 
 class ProgressBar:
 	"""
@@ -510,63 +630,43 @@ class ProgressBar:
 			time_string = "\tTime Elapsed: {}".format(time.strftime("%H:%M:%S", time.gmtime(time_elapsed)))
 
 		print("{}[{}]\t{:.2%}{}".format(self.pre, progress_bar, percent, time_string), end=term_char, flush=True)
-		
 
 
 def main():
-	parser = argparse.ArgumentParser(description="video frame visualizer and movie barcode generator", add_help=False)  # removing help so I can use '-h' for height
-
-	parser.add_argument("source", help="file path for the video file to be visualized", type=str)
-	parser.add_argument("destination", help="file path output for the final image", type=str)
-	parser.add_argument("-n", "--nframes", help="the number of frames in the visualization", type=int)
-	parser.add_argument("-i", "--interval", help="interval between frames for the visualization", type=float)
-	parser.add_argument("-h", "--height", help="the height of each frame, in pixels", type=int, default=FrameVis.default_frame_height)
-	parser.add_argument("-w", "--width", help="the output width of each frame, in pixels", type=int, default=FrameVis.default_frame_width)
-	parser.add_argument("-d", "--direction", help="direction to concatenate frames, horizontal or vertical", type=str, \
-		choices=["horizontal", "vertical"],	default=FrameVis.default_direction)
-	parser.add_argument("-t", "--trim", help="detect and trim any hard matting (letterboxing or pillarboxing)", action='store_true', default=False)
-	parser.add_argument("-a", "--average", help="average colors for each frame", action='store_true', default=False)
-	parser.add_argument("-b", "--blur", help="apply motion blur to the frames (kernel size)", type=int, nargs='?', const=100, default=0)
-	parser.add_argument("-q", "--quiet", help="mute console outputs", action='store_true', default=False)
-	parser.add_argument("--help", action="help", help="show this help message and exit")
-
-	args = parser.parse_args()
-
-	# check number of frames arguments
-	if args.nframes is None:
-		if args.interval is not None:  # calculate nframes from interval
-			args.nframes = FrameVis.nframes_from_interval(args.source, args.interval)
-		else:
-			parser.error("You must provide either an --(n)frames or --(i)nterval argument")
-
-	# check postprocessing arguments
-	if args.average is True and args.blur != 0:
-		parser.error("Cannot (a)verage and (b)lur, you must choose one or the other")
+	source = input("Enter the video filename: ")
+	destination = input("Enter the intended output png filename: ")
+	concert_date = input("Enter the date of the concert (Format YYYY-MM-DD): ")
+	concert_time = input("Enter the start time of the concert (Format HH:MM AM/PM): ")
+	concert_attendance = input("Enter the concert attendance: ")
+	concert_venue = input("Enter the concert venue: ")
+	concert_city = input("Enter the concert city: ")
+	concert_country = input("Enter the concert country: ")
+	blur_amount = input("Enter the number from 0-100 that the image should be blurred (default 100 if you hit enter): ") or 100
 
 	fv = FrameVis()
 
-	output_image = fv.visualize(args.source, args.nframes, height=args.height, width=args.width, \
-		direction=args.direction, trim=args.trim, quiet=args.quiet)
+	output_image, video_duration = fv.visualize(source)
 
 	# postprocess
-	if args.average or args.blur != 0:
-		if args.average:
-			if not args.quiet:
-				print("Averaging frame colors... ", end="", flush=True)
-			output_image = fv.average_image(output_image, args.direction)
-		
-		if args.blur != 0:
-			if not args.quiet:
-				print("Adding motion blur to final frame... ", end="", flush=True)
-			output_image = fv.motion_blur(output_image, args.direction, args.blur)
+	print("Adding motion blur to final frame... ", end="", flush=True)
+	output_image = fv.motion_blur(output_image)
 
-		if not args.quiet:
-			print("done")
-	
-	cv2.imwrite(args.destination, output_image)  # save visualization to file
+	print("done")
 
-	if not args.quiet:
-		print("Visualization saved to {}".format(args.destination))
+	pil_image = fv.caption_text(
+		img=output_image,
+		date=concert_date,
+		city=concert_city,
+		country=concert_country,
+		start_time=concert_time,
+		venue=concert_venue,
+		attendance=concert_attendance,
+		duration=video_duration
+	)
+
+	pil_image.save(destination)  # save visualization to file
+
+	print("Visualization saved to {}".format(destination))
 
 
 if __name__ == "__main__":
