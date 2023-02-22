@@ -43,7 +43,7 @@ class FrameVis:
 	default_direction = "vertical"  # up to down
 	output_width = 2160
 	output_height = 3840
-	default_nframes = 25
+	default_nframes = 1280
 	default_frame_height = int(output_height / default_nframes)  # auto, or in pixels
 
 	def visualize(self, source, nframes=default_nframes, height=default_frame_height, width=default_frame_width,
@@ -62,6 +62,8 @@ class FrameVis:
 		Returns:
 			visualization image as numpy array
 		"""
+
+		height = int(self.output_height / nframes)
 
 		video = cv2.VideoCapture(source)  # open video file
 		if not video.isOpened():
@@ -310,50 +312,53 @@ class FrameVis:
 			self,
 			img,
 			date: str,
-			start_time: str,
+			blocks: str,
 			city: str,
 			country: str,
 			venue: str,
-			attendance: int,
-			duration: int,
-			ntimestamps: int = 8,
+			attendance: int
 	):
 		color_converted = cv2.cvtColor(img, cv2.COLOR_BGR2RGBA)
 		pil_img = Image.fromarray(color_converted)
 
 		# all measurements based off a height of 3240
-
-		font = ImageFont.FreeTypeFont('roboto_mono.ttf', 75)
+		text_size = 75
+		font = ImageFont.FreeTypeFont('roboto_mono.ttf', text_size)
 		text_image = Image.new('RGBA', pil_img.size, (255, 255, 255, 0))
 		drawing = ImageDraw.Draw(text_image)
 
 		# print timestamps
 		top_edge = 50
 		top = 50
-		left_edge = 50
-		bottom_edge = 0
-		current_timestamp = pendulum.from_format(date + ' ' + start_time, fmt='YYYY-MM-DD h:mm A')
-		timestamp_split_duration = int(duration / ntimestamps)
-		for timestamp in range(0, ntimestamps):
-			self.text_with_rectangle(
-				img=drawing,
-				x=left_edge,
-				y=top,
-				text=current_timestamp.format(fmt='h:mm A'),
-				font=font
-			)
-			current_timestamp = current_timestamp.add(seconds=timestamp_split_duration)
-			top += (self.output_height - bottom_edge - top_edge) / ntimestamps
+		left_edge = 0
+		bottom_edge = self.output_height - 200
+		current_timestamp = pendulum.from_format(date, fmt='YYYY-MM-D')
+		block1, block2 = blocks.split(',')
+		self.text_with_rectangle(
+			img=drawing,
+			x=left_edge,
+			y=top,
+			text=block1,
+			font=font
+		)
+		self.text_with_rectangle(
+			img=drawing,
+			x=left_edge,
+			y=bottom_edge,
+			text=block2,
+			font=font
+		)
 
-		top_of_right_side_text = int(self.output_height / 2)
-		right_edge = self.output_width - 50
-		right_side_text_spacing = int(self.output_height / 2 / 4)
-		# print date
+		top_of_right_side_text = self.output_height - (4 * 125) - 75
+		right_edge = self.output_width
+		right_side_text_spacing = 125
+
+		# print venue
 		self.text_with_rectangle(
 			img=drawing,
 			x=right_edge,
 			y=top_of_right_side_text,
-			text=current_timestamp.format(fmt='MM.DD.YYYY'),
+			text=venue,
 			font=font,
 			alignment='right'
 		)
@@ -370,12 +375,12 @@ class FrameVis:
 		)
 		top_of_right_side_text += right_side_text_spacing
 
-		# print venue
+		# print date
 		self.text_with_rectangle(
 			img=drawing,
 			x=right_edge,
 			y=top_of_right_side_text,
-			text=venue,
+			text=current_timestamp.format(fmt='MM.DD.YYYY'),
 			font=font,
 			alignment='right'
 		)
@@ -386,7 +391,7 @@ class FrameVis:
 			img=drawing,
 			x=right_edge,
 			y=top_of_right_side_text,
-			text=f'{attendance} people',
+			text=f'{attendance} present',
 			font=font,
 			alignment='right'
 		)
@@ -395,19 +400,22 @@ class FrameVis:
 
 		return output_image
 
-	@staticmethod
-	def text_with_rectangle(img: ImageDraw.ImageDraw, x: int, y: int, text: str, font: ImageFont.ImageFont,
+	def text_with_rectangle(self, img: ImageDraw.ImageDraw, x: int, y: int, text: str, font: ImageFont.ImageFont,
 							text_size: int = 75,
-							padding: int = 75, alignment=None) -> object:
+							padding: int = 50, alignment=None) -> object:
 		text_length = img.textlength(text, font=font)
 		if alignment == 'right':
 			x = x - text_length - 2 * padding
-		img.rounded_rectangle(
-			((x, y), (x + 2 * padding + text_length, y + text_size + padding)),
-			radius=50,
-			fill=(255, 255, 255, 128)
-		)
-		img.text(xy=(x + padding, y + padding), text=text, font=font, anchor='lm', fill=(0, 0, 0))
+			img.rectangle(
+				((x, y), (self.output_width + 50, y + text_size + padding)),
+				fill=(255, 255, 255, 128)
+			)
+		else:
+			img.rectangle(
+				((-50, y), (x + 2 * padding + text_length, y + text_size + padding)),
+				fill=(255, 255, 255, 128)
+			)
+		img.text(xy=(x + padding, y + padding + 10), text=text, font=font, anchor='lm', fill=(0, 0, 0))
 
 
 class MatteTrimmer:
@@ -633,35 +641,37 @@ class ProgressBar:
 
 
 def main():
-	source = input("Enter the video filename: ")
-	destination = input("Enter the intended output png filename: ")
+	source = input("Enter the video filename (include extension): ")
+	destination = input("Enter the intended output png filename(include .png): ")
 	concert_date = input("Enter the date of the concert (Format YYYY-MM-DD): ")
-	concert_time = input("Enter the start time of the concert (Format HH:MM AM/PM): ")
+	blocks = input("Enter the start and end block hashes separated by a comma (ex: 0xdc4f,0xdc4f): ")
 	concert_attendance = input("Enter the concert attendance: ")
 	concert_venue = input("Enter the concert venue: ")
 	concert_city = input("Enter the concert city: ")
 	concert_country = input("Enter the concert country: ")
-	blur_amount = input("Enter the number from 0-100 that the image should be blurred (default 100 if you hit enter): ") or 100
+	blur_amount = int(input("Enter the number from 0-100 that the image should be blurred (default 100 if you hit enter): ") or 100)
+	nframes = int(input("Enter the number of frames you'd like to generate for the image (default 1280 if you hit enter): ") or 1280)
 
 	fv = FrameVis()
 
-	output_image, video_duration = fv.visualize(source)
+	output_image, video_duration = fv.visualize(source, nframes=nframes)
 
 	# postprocess
 	print("Adding motion blur to final frame... ", end="", flush=True)
-	output_image = fv.motion_blur(output_image)
+	output_image = fv.motion_blur(output_image, blur_amount=blur_amount)
 
 	print("done")
+
+	cv2.imwrite('no_text_' + destination, output_image)  # save visualization without text to file
 
 	pil_image = fv.caption_text(
 		img=output_image,
 		date=concert_date,
 		city=concert_city,
 		country=concert_country,
-		start_time=concert_time,
+		blocks=blocks,
 		venue=concert_venue,
 		attendance=concert_attendance,
-		duration=video_duration
 	)
 
 	pil_image.save(destination)  # save visualization to file
